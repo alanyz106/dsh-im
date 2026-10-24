@@ -13,6 +13,7 @@ import feishu from './i18n-en/feishu.mjs';
 import dingtalk from './i18n-en/dingtalk.mjs';
 import wecom from './i18n-en/wecom.mjs';
 import wecomApp from './i18n-en/wecom-app.mjs';
+import context from './i18n-en/context.mjs';
 import qq from './i18n-en/qq.mjs';
 import weixin from './i18n-en/weixin.mjs';
 import slack from './i18n-en/slack.mjs';
@@ -35,6 +36,7 @@ export const EN = Object.freeze(Object.assign(
   dingtalk,
   wecom,
   wecomApp,
+  context,
   qq,
   weixin,
   slack,

@@ -14,6 +14,7 @@ import feishu from './i18n-ru/feishu.mjs';
 import dingtalk from './i18n-ru/dingtalk.mjs';
 import wecom from './i18n-ru/wecom.mjs';
 import wecomApp from './i18n-ru/wecom-app.mjs';
+import context from './i18n-ru/context.mjs';
 import qq from './i18n-ru/qq.mjs';
 import weixin from './i18n-ru/weixin.mjs';
 import slack from './i18n-ru/slack.mjs';
@@ -36,6 +37,7 @@ export const RU = Object.freeze(Object.assign(
   dingtalk,
   wecom,
   wecomApp,
+  context,
   qq,
   weixin,
   slack,

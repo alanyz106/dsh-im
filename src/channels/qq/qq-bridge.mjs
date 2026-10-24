@@ -6,6 +6,7 @@ import { runWorkspaceCommand } from '../shared/workspace-command.mjs';
 import { runCompactCommand } from '../shared/compact-command.mjs';
 import { isClearCommand, runClearCommand } from '../shared/clear-command.mjs';
 import { isHistoryCommand, runHistoryCommand } from '../shared/history-command.mjs';
+import { isContextCommand, runContextCommand } from '../shared/context-command.mjs';
 import {
   isControlCommand,
   runControlCommand,
@@ -113,6 +114,7 @@ function helpText() {
     t('/compact  压缩当前会话的较早上下文'),
     t('/clear  清空当前会话上下文（保留 Session 绑定和历史记录）'),
     t('/history [数量]  查看最近历史消息（默认 3 条，最多 5 条）'),
+    t('/context  查看当前会话的上下文用量'),
     t('/workspace 工作区序号或绝对路径  切换工作区'),
     t('/workspacelist  列出工作区绝对路径'),
     t('/ws、/wsl、/workspaces  工作区命令别名'),
@@ -989,6 +991,7 @@ export class QqHarnessBridge {
       });
       if (isClearCommand(command)) return runClearCommand(command, this.#harness, this.#state, key, options);
       if (command === '/compact') return runCompactCommand(command, this.#harness, this.#state, key, options);
+      if (isContextCommand(command)) return runContextCommand(command, this.#harness, this.#state, key, options);
       return runWorkspaceCommand(command, this.#harness, key);
     };
     // Stop/steer must stay available while a slower menu mutation is pending.
@@ -1238,6 +1241,16 @@ export class QqHarnessBridge {
           );
       if (compactCommand) {
         await this.#bot.sendText(target, compactCommand.message);
+        await markMessageSeen();
+        return;
+      }
+      const contextCommand = await runContextCommand(text, this.#harness, this.#state, key, {
+        signal: this.#signal,
+        hasImages,
+        hasFiles,
+      });
+      if (contextCommand) {
+        await this.#bot.sendText(target, contextCommand.message);
         await markMessageSeen();
         return;
       }

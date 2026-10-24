@@ -366,6 +366,82 @@ function workspaceSessions(workspace, archivedSessionIds, sessionList) {
   };
 }
 
+/**
+ * Normalize the Host's folded context telemetry for one listed Session.
+ *
+ * Every field is optional: a Session that never issued a request has an empty
+ * projection, and a provider that reports no usage leaves `pressureTokens`
+ * unset. Returning nulls instead of zeros keeps "unknown" distinguishable from
+ * a genuine zero so the caller can pick the right wording.
+ */
+function sessionContextSnapshot(sessionId, item) {
+  const projections = item?.projections;
+  const values = projections?.values;
+  const rawPressure = values?.contextPressure;
+  const rawBreakdown = values?.contextBreakdown;
+  const rawUsage = values?.tokenUsage;
+
+  const finiteOrUndefined = (value) => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+  );
+
+  let pressure = null;
+  if (rawPressure && typeof rawPressure === 'object') {
+    const pressureTokens = finiteOrUndefined(rawPressure.pressureTokens);
+    const projectedTokens = finiteOrUndefined(rawPressure.projectedTokens);
+    const contextWindow = finiteOrUndefined(rawPressure.contextWindow);
+    const surfaceTokens = finiteOrUndefined(rawPressure.surfaceTokens);
+    if (pressureTokens !== undefined || projectedTokens !== undefined
+      || contextWindow !== undefined || surfaceTokens !== undefined) {
+      pressure = { pressureTokens, projectedTokens, contextWindow, surfaceTokens };
+    }
+  }
+
+  let breakdown = null;
+  const breakdownValues = rawBreakdown?.breakdown;
+  if (breakdownValues && typeof breakdownValues === 'object') {
+    const systemTokens = finiteOrUndefined(breakdownValues.systemTokens);
+    const toolsTokens = finiteOrUndefined(breakdownValues.toolsTokens);
+    const messageTokens = finiteOrUndefined(breakdownValues.messageTokens);
+    if (systemTokens !== undefined || toolsTokens !== undefined || messageTokens !== undefined) {
+      breakdown = {
+        systemTokens: systemTokens ?? 0,
+        toolsTokens: toolsTokens ?? 0,
+        messageTokens: messageTokens ?? 0,
+      };
+    }
+  }
+
+  let usage = null;
+  const totals = rawUsage?.totals;
+  if (totals && typeof totals === 'object') {
+    const inputTokens = finiteOrUndefined(totals.uncachedInputTokens);
+    const outputTokens = finiteOrUndefined(totals.outputTokens);
+    const cacheReadTokens = finiteOrUndefined(totals.cacheReadTokens);
+    const cacheWriteTokens = finiteOrUndefined(totals.cacheWriteTokens);
+    if (inputTokens !== undefined || outputTokens !== undefined
+      || cacheReadTokens !== undefined || cacheWriteTokens !== undefined) {
+      usage = {
+        inputTokens: inputTokens ?? 0,
+        outputTokens: outputTokens ?? 0,
+        cacheReadTokens: cacheReadTokens ?? 0,
+        cacheWriteTokens: cacheWriteTokens ?? 0,
+      };
+    }
+  }
+
+  return {
+    sessionId,
+    live: item?.agentAvailable === true,
+    projectionKind: projections?.kind === 'cached' || projections?.kind === 'sequenced'
+      ? projections.kind
+      : null,
+    pressure,
+    breakdown,
+    usage,
+  };
+}
+
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -1319,6 +1395,35 @@ export class HarnessClient {
       }
     }
     return value.items.find((item) => item.sessionId === sessionId)?.running ?? false;
+  }
+
+  /**
+   * Read the context-window telemetry the Host folds for one Session.
+   *
+   * Everything comes from the `session.list` projection block, so this adds no
+   * RPC. A provider that never reports usage leaves `pressureTokens` absent, so
+   * the snapshot also carries the heuristic `contextBreakdown` totals and the
+   * caller decides which figure to present.
+   *
+   * @returns {Promise<null | {
+   *   sessionId: string,
+   *   live: boolean,
+   *   projectionKind: ('cached' | 'sequenced' | null),
+   *   pressure: { pressureTokens?: number, projectedTokens?: number, contextWindow?: number, surfaceTokens?: number } | null,
+   *   breakdown: { systemTokens: number, toolsTokens: number, messageTokens: number } | null,
+   *   usage: { inputTokens: number, outputTokens: number, cacheReadTokens: number, cacheWriteTokens: number } | null,
+   * }>} Null when the Host does not list the Session.
+   */
+  async getSessionContext(sessionId, options = {}) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new TypeError('sessionId is required');
+    await this.ensureRunning(options);
+    const value = await this.rpc('session.list', {}, 30_000, options);
+    if (!value || typeof value !== 'object' || !Array.isArray(value.items)) {
+      throw new Error('Harness returned an invalid response for session.list');
+    }
+    const item = value.items.find((candidate) => candidate?.sessionId === sessionId);
+    if (!item) return null;
+    return sessionContextSnapshot(sessionId, item);
   }
 
   async adoptWorkspaceSession(value, options = {}) {
