@@ -27,4 +27,9 @@ export default {
   '纯数字 ID：/permission id:<ID>': 'Numeric IDs: /permission id:<ID>',
   '`/permissionlist` — 按序号列出权限档位': '`/permissionlist` — List numbered permission presets',
   '`/permission [序号/ID]` — 查看或切换当前会话权限': '`/permission [number/ID]` — Show or switch current session permissions',
+  '仅可查看': 'Read only',
+  '工作区内修改': 'Workspace write',
+  '完全权限': 'Full access',
+  '自动审查': 'Auto review',
+  '当前会话已变化，请重新打开菜单。': 'The current session changed. Reopen the menu.',
 };

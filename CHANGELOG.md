@@ -6,6 +6,11 @@ This file records the notable changes in each dsh-im release. Its format follows
 
 ## [Unreleased]
 
+### Added / 新增
+
+- QQ 的 `/m` 菜单新增「🔐 修改权限」：卡片标出当前权限档位，把 Host 提供的档位各列为一个按钮，点击即按 `/permission <档位>` 切换当前会话，最后一项返回主菜单。菜单正文同步在「当前会话」下方显示「权限：当前档位」，未绑定会话显示「未绑定会话」、Host 无权限目录显示「暂不可用」，且不会因此把菜单标记为部分加载失败。档位每次打开都实时读取 Host 目录，`read-only`、`workspace-write`、`danger-full-access`、`auto` 沿用网页端文案，其他档位显示 Host 名称；未绑定会话或 Host 不支持时说明原因并保留返回入口。原 `/permissionlist`、`/permission` 文本命令行为不变。
+  QQ's `/m` menu gained **Change permissions**, and its body now reports the current preset on a line under the bound session (saying "no session bound" or "unavailable" instead, without flagging the menu as partially loaded): the card marks the current preset, lists one button per Host preset, switches the current session on press through `/permission <preset>`, and ends with the way back to the main menu. The catalog is re-read from the Host each time, conventional presets reuse the Web UI wording while other presets keep the Host label, and an unbound session or unsupported Host states the reason while keeping the way back. The existing `/permissionlist` and `/permission` text commands are unchanged.
+
 ## [5.6.0] - 2026-10-24
 
 ### Added / 新增

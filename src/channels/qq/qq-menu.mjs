@@ -1,12 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { ApiError } from '@tencent-connect/qqbot-nodejs';
 import { workspacePathSnapshot } from '../shared/workspace-command.mjs';
+import { readPermissionChoices } from '../shared/permission-command.mjs';
 import { t } from '../shared/i18n.mjs';
 
 export const QQ_MENU_TTL_MS = 15 * 60_000;
 const PAGE_SIZE = 6;
 const MAX_MENUS = 256;
-const SECTIONS = new Set(['main', 'sessions', 'workspaces', 'presets', 'models', 'steer', 'custom', 'status', 'help']);
+const SECTIONS = new Set(['main', 'sessions', 'workspaces', 'presets', 'models', 'permissions',
+  'steer', 'custom', 'status', 'help']);
 const clean = (value, limit = 160) => [...String(value ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ')].slice(0, limit).join('');
 const command = (label, text) => ({ label, action: { kind: 'command', text } });
 const section = (label, name) => ({ label, action: { kind: 'section', name } });
@@ -100,23 +102,34 @@ export async function qqMenuView(name, harness, state, key, { signal, busy = fal
       harness.listWorkspaceSessions?.(name === 'main' ? sessionWorkspace : workspace, options),
       catalogFor(harness, sessionId, key, options),
       harness.agentPresetSettings?.(options),
+      // Settled alongside the other reads so a Host without permission presets
+      // still renders the rest of the menu; the line just reports it.
+      readPermissionChoices(harness, state, key, options),
     ]);
     signal?.throwIfAborted();
-    const [listed, catalog, settings] = results.map((r) => r.status === 'fulfilled' ? r.value : null);
+    const [listed, catalog, settings, permissions] = results.map((r) => r.status === 'fulfilled' ? r.value : null);
     const bound = listed?.sessions?.find((item) => item.sessionId === sessionId);
     const presetId = settings?.agentPreset ?? settings?.agentPresetCatalog?.defaultId;
     const preset = settings?.agentPresetCatalog?.items?.find((item) => item.id === presetId);
     const model = catalog?.groups?.find((group) => group.id === catalog.current?.provider)
       ?.models?.find((item) => item.id === catalog.current?.model);
+    const permissionLabel = permissions?.ok
+      ? clean(permissions.currentLabel)
+      : sessionId ? t('暂不可用') : t('未绑定会话');
     const detail = [
       name === 'status' ? t('QQ 机器人与 DeepSeek Harness 连接正常。') : '',
       t('工作区：{workspace}', { workspace: clean(workspace) || t('未设置') }),
       t('当前会话：{session}', { session: clean(bound?.title || sessionId) || t('新会话') }),
+      t('权限：{permission}', { permission: permissionLabel || t('暂不可用') }),
       t('模式／预设：{preset}', { preset: clean(preset?.label || presetId) || t('跟随 Host 默认') }),
       t('当前模型：{model}', { model: clean(model?.name || catalog?.current?.model) || t('暂不可用') }),
       t('归档会话：{state}', { state: archived ? t('显示') : t('隐藏') }),
       t('任务状态：{state}', { state: busy ? t('处理中') : t('空闲') }),
-      results.some((r) => r.status === 'rejected') ? t('部分设置暂未加载，可进入对应列表重试。') : '',
+      // Only the settings reads above are optional extras worth retrying from
+      // their own list; a Host without permission presets is reported by the
+      // permission line itself, not as a partially loaded menu.
+      results.slice(0, 3).some((r) => r.status === 'rejected')
+        ? t('部分设置暂未加载，可进入对应列表重试。') : '',
     ].filter(Boolean).join('\n');
     return { title: name === 'main' ? t('🤖 助手中心') : t('📊 状态'), detail,
       columns: 3, entries: name === 'status' ? [back()] : [
@@ -124,7 +137,8 @@ export async function qqMenuView(name, harness, state, key, { signal, busy = fal
         section(t('🧠 模型'), 'models'), command(t('🆕 新会话'), '/new'), section(t('📋 会话列表'), 'sessions'),
         command(t('⏹ 停止'), '/stop'), command(t('📐 压缩'), '/compact'), command(t('🧹 清空上下文'), '/clear'), section(t('💬 补充指令'), 'steer'),
         { label: t('切换归档显示'), action: { kind: 'archive', include: !archived } },
-        section(t('📊 状态'), 'status'), section(t('📖 帮助'), 'help'),
+        section(t('📊 状态'), 'status'), section(t('🔐 修改权限'), 'permissions'),
+        section(t('📖 帮助'), 'help'),
       ] };
   }
   if (name === 'sessions') {
@@ -152,6 +166,29 @@ export async function qqMenuView(name, harness, state, key, { signal, busy = fal
         `${settings.agentPreset === item.id ? '✓ ' : ''}${clean(item.label || item.id, 70)}`,
         `/preset ${/^\d+$/u.test(item.id) ? 'id:' : ''}${item.id}`)),
     ] });
+  }
+  if (name === 'permissions') {
+    // The Host owns the catalog: names, order and meaning all come from it.
+    // A bare menu press (no bound session, unsupported Host) still renders a
+    // usable card that explains the problem and offers the way back.
+    const choices = await readPermissionChoices(harness, state, key, options);
+    if (!choices.ok) {
+      return { title: t('🔐 修改权限'), columns: 1, detail: choices.message, entries: [back()] };
+    }
+    const detail = [
+      t('当前权限：{value}', { value: clean(choices.currentLabel) }),
+      t('切换只影响当前会话；沙箱与审批策略会一起更新。'),
+    ].join('\n');
+    const entries = choices.options.map((option) => command(
+      `${option.current ? '✓ ' : ''}${clean(option.label, 60)}`,
+      `/permission ${/^\d+$/u.test(option.value) ? 'id:' : ''}${option.value}`,
+    ));
+    // QQ accepts at most five button rows. Two columns hold nine presets plus
+    // the way back; a longer Host catalog pages instead of being truncated.
+    if (entries.length <= 9) {
+      return { title: t('🔐 修改权限'), columns: 2, detail, entries: [...entries, back()] };
+    }
+    return qqMenuPage({ title: t('🔐 修改权限'), detail, choices: entries });
   }
   if (name === 'steer') return { title: t('💬 补充指令'), columns: 2,
     detail: t('给当前正在运行的任务补充指令。'), entries: [

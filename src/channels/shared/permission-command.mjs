@@ -46,6 +46,22 @@ function description(item) {
   return text;
 }
 
+// Conventional preset ids get the wording the Web UI uses; a deployment may
+// name its own presets, and those keep whatever label the Host supplies.
+const PRESET_LABELS = new Map([
+  ['read-only', () => t('仅可查看')],
+  ['workspace-write', () => t('工作区内修改')],
+  ['danger-full-access', () => t('完全权限')],
+  ['auto', () => t('自动审查')],
+]);
+
+function presetLabel(item) {
+  const known = PRESET_LABELS.get(item.value);
+  if (known) return known();
+  const label = display(item.name);
+  return label && label !== item.value ? label : item.value;
+}
+
 function errorMessage(error, writing) {
   const code = error?.code ?? error?.failure?.code;
   if (code === WORKSPACE_SESSION_STALE || code === 'workspace-bot-not-found') {
@@ -67,6 +83,59 @@ export function isPermissionCommand(text) {
   return typeof text === 'string' && COMMAND.test(text.trim());
 }
 
+/** Resolve one Session handle, accepting both the scoped and the flat Host shape. */
+function sessionHandle(harness, sessionId, key) {
+  if (typeof harness.workspaceSession === 'function') return harness.workspaceSession(sessionId, key);
+  return {
+    permissions: harness.getSessionPermissions && ((opts) => harness.getSessionPermissions(sessionId, opts)),
+    executeCommand: harness.executeCommand && ((line, opts) => harness.executeCommand(sessionId, line, opts)),
+  };
+}
+
+/**
+ * Read the presets a picker can offer, in the Host's own order.
+ *
+ * Menus use this instead of parsing `/permissionlist` text, so a menu label and
+ * the text command's list always describe the same catalog. The result is a
+ * value object rather than a thrown error: a picker renders `message` in place
+ * of its choices instead of failing the whole menu.
+ */
+export async function readPermissionChoices(harness, state, key, options = {}) {
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+  try {
+    signal.throwIfAborted();
+    const sessionId = state.sessionFor?.(key);
+    if (!sessionId) {
+      return {
+        ok: false,
+        message: t('当前聊天尚未绑定会话，请先发送普通消息建立会话，或使用 /session 绑定已有会话。'),
+      };
+    }
+    const session = sessionHandle(harness, sessionId, key);
+    if (typeof session?.permissions !== 'function') {
+      return { ok: false, message: t('当前 Host 暂不支持从机器人查看或切换权限档位。') };
+    }
+    const current = permissions(await session.permissions({ signal }));
+    if (state.sessionFor?.(key) !== sessionId) {
+      return { ok: false, message: t('当前会话已变化，请重新打开菜单。') };
+    }
+    const choices = current.options.map((item) => ({
+      value: item.value,
+      label: presetLabel(item),
+      current: item.value === current.currentValue,
+    }));
+    const matched = choices.find((item) => item.current);
+    return {
+      ok: true,
+      currentLabel: matched?.label ?? display(current.currentValue),
+      options: choices,
+    };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error, false) };
+  }
+}
+
 export async function runPermissionCommand(text, harness, state, key, options = {}) {
   if (!isPermissionCommand(text)) return null;
   if (options.hasImages || options.hasFiles) {
@@ -85,12 +154,7 @@ export async function runPermissionCommand(text, harness, state, key, options = 
       signal.throwIfAborted();
       const sessionId = state.sessionFor?.(key);
       if (!sessionId) return result(t('当前聊天尚未绑定会话，请先发送普通消息建立会话，或使用 /session 绑定已有会话。'));
-      const session = typeof harness.workspaceSession === 'function'
-        ? harness.workspaceSession(sessionId, key)
-        : {
-            permissions: harness.getSessionPermissions && ((opts) => harness.getSessionPermissions(sessionId, opts)),
-            executeCommand: harness.executeCommand && ((line, opts) => harness.executeCommand(sessionId, line, opts)),
-          };
+      const session = sessionHandle(harness, sessionId, key);
       if (!requested) {
         if (typeof session?.permissions !== 'function') return result(t('当前 Host 暂不支持从机器人查看或切换权限档位。'));
         const current = permissions(await session.permissions({ signal }));

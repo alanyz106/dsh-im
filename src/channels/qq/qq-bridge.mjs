@@ -992,6 +992,9 @@ export class QqHarnessBridge {
       if (isClearCommand(command)) return runClearCommand(command, this.#harness, this.#state, key, options);
       if (command === '/compact') return runCompactCommand(command, this.#harness, this.#state, key, options);
       if (isContextCommand(command)) return runContextCommand(command, this.#harness, this.#state, key, options);
+      // The permission picker offers one command per preset, so a press must
+      // run the same handler as typing `/permission <preset>`.
+      if (isPermissionCommand(command)) return runPermissionCommand(command, this.#harness, this.#state, key, options);
       return runWorkspaceCommand(command, this.#harness, key);
     };
     // Stop/steer must stay available while a slower menu mutation is pending.

@@ -8,3 +8,8 @@ coverage/
 .DS_Store
 .idea/
 e2e/
+
+# Local working notes, kept out of the published package and the repository.
+# Anchored so the tracked src/channels/shared/AGENTS.md stays versioned.
+/AGENTS.md
+/memory/

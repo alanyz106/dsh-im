@@ -94,4 +94,10 @@ export default {
   'QQ 连接当前离线': 'The QQ connection is currently offline',
   'QQ 已授权，但无法安全保存接入配置。':
     'QQ authorization succeeded, but the connection configuration could not be saved safely.',
+  '🔐 修改权限': '🔐 Change permissions',
+  '当前权限：{value}': 'Current permission: {value}',
+  '切换只影响当前会话；沙箱与审批策略会一起更新。':
+    'Switching applies to the current session only; the sandbox and approval policy change together.',
+  '权限：{permission}': 'Permissions: {permission}',
+  '未绑定会话': 'No session bound',
 };

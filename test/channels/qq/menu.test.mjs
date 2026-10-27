@@ -35,6 +35,12 @@ async function fixture(t, { rejection, policy, group = false } = {}) {
   let workspace = dir;
   let selected = { provider: 'provider', model: 'model-1' };
   let preset = null;
+  let permission = 'workspace-write';
+  const permissionOptions = () => [
+    { value: 'read-only', sandbox: 'read-only' },
+    { value: 'workspace-write', sandbox: 'workspace-write' },
+    { value: 'danger-full-access', description: 'Full file access without approval prompts.' },
+  ];
   let sequence = 0;
   const calls = [];
   const sent = [];
@@ -62,7 +68,18 @@ async function fixture(t, { rejection, policy, group = false } = {}) {
       calls.push(['bind', route, id]); await state.setSession(route, id);
       return { workspace, sessionId: id, title: id, archived: false };
     },
-    executeCommand: async (id, cmd) => { calls.push(['compact', id, cmd]); return { result: { kind: 'success', text: 'Compacted 4 history items (~500 tokens).' } }; },
+    executeCommand: async (id, cmd) => {
+      calls.push(['compact', id, cmd]);
+      if (cmd.startsWith('/permission ')) {
+        const wanted = cmd.slice('/permission '.length);
+        if (!permissionOptions().some((item) => item.value === wanted)) {
+          return { result: { kind: 'error', text: `unknown preset "${wanted}"` } };
+        }
+        permission = wanted;
+        return { result: { kind: 'success', text: `preset ${wanted}` } };
+      }
+      return { result: { kind: 'success', text: 'Compacted 4 history items (~500 tokens).' } };
+    },
     workspaceSession: (id) => ({
       ask: (text, options) => harness.ask(id, text, options),
       executeCommand: (command, options) => harness.executeCommand(id, command, options),
@@ -70,6 +87,7 @@ async function fixture(t, { rejection, policy, group = false } = {}) {
       selectModel: async (selection) => { calls.push(['model', selection]); selected = selection; return { selected }; },
       stopActiveTurn: async (control) => { calls.push(['stop', control.key]); return true; },
       steerActiveTurn: async (text, control) => { calls.push(['steer', text, control.key]); return true; },
+      permissions: async () => ({ currentValue: permission, options: permissionOptions() }),
     }),
   };
   const bot = {
@@ -90,19 +108,26 @@ async function fixture(t, { rejection, policy, group = false } = {}) {
   const send = (text, overrides) => bridge.accept(message(text, overrides));
   const latestMenu = () => sent.findLast((entry) => entry.keyboard);
   const pick = (number, menu = latestMenu(), overrides) => send(menu.keyboard.content.rows.flatMap((r) => r.buttons)[number - 1].action.data, overrides);
-  return { dir, other, route, state, calls, sent, harness, bridge, bot, send, message, pick, latestMenu, sessions };
+  return { dir, other, route, state, calls, sent, harness, bridge, bot, send, message, pick, latestMenu, sessions,
+    permission: () => permission, setPermission: (value) => { permission = value; } };
 }
 
-test('QQ main menu contains the agreed thirteen actions without watches or reasoning selection', async (t) => {
+test('QQ main menu contains the agreed fourteen actions without watches or reasoning selection', async (t) => {
   const f = await fixture(t);
   await f.send('/m');
   const menu = f.latestMenu();
   const buttons = menu.keyboard.content.rows.flatMap((r) => r.buttons);
-  assert.equal(buttons.length, 13);
+  assert.equal(buttons.length, 14);
   assert.ok(menu.keyboard.content.rows.length <= 5);
   assert.ok(menu.keyboard.content.rows.every((r) => r.buttons.length <= 5));
   assert.doesNotMatch(menu.text, /关注|推理等级/);
   assert.match(menu.text, /标准模式/);
+  assert.match(menu.text, /修改权限/);
+  // The permission line sits directly under the bound session line.
+  const lines = menu.text.split('\n');
+  const sessionLine = lines.findIndex((line) => line.startsWith('当前会话：'));
+  assert.ok(sessionLine >= 0);
+  assert.equal(lines[sessionLine + 1], '权限：工作区内修改');
   for (const button of buttons) {
     assert.equal(button.action.type, 2);
     assert.equal(button.action.enter, true);
@@ -328,6 +353,129 @@ test('QQ queued menu actions recheck running work before changing the session', 
   await prompt;
 });
 
+test('QQ permission menu offers the Host presets, switches in one press, and leads back', async (t) => {
+  const f = await fixture(t);
+  await f.send('/m');
+  const main = f.latestMenu();
+  const permissionButton = main.keyboard.content.rows.flatMap((r) => r.buttons)
+    .find((button) => button.render_data.label.includes('修改权限'));
+  assert.ok(permissionButton, 'the main menu has a permission entry');
+  await f.send(permissionButton.action.data);
+
+  const menu = f.latestMenu();
+  assert.match(menu.text, /修改权限/);
+  assert.match(menu.text, /当前权限：工作区内修改/);
+  assert.match(menu.text, /1\. 仅可查看/);
+  assert.match(menu.text, /2\. ✓ 工作区内修改/);
+  assert.match(menu.text, /3\. 完全权限/);
+  // Every preset plus the way back: the picker never grows an unrelated entry.
+  assert.equal(menu.keyboard.content.rows.flatMap((r) => r.buttons).length, 4);
+  assert.match(menu.text, /返回主菜单/);
+
+  await f.pick(1);
+  assert.deepEqual(f.calls.find(([op]) => op === 'compact'), ['compact', 'session-original', '/permission read-only']);
+  assert.equal(f.permission(), 'read-only');
+  assert.match(f.sent.at(-1).text, /当前会话权限已切换为：read-only/);
+
+  await f.send('/m permissions');
+  assert.match(f.latestMenu().text, /当前权限：仅可查看/);
+  await f.pick(3);
+  assert.equal(f.permission(), 'danger-full-access');
+  assert.match(f.sent.at(-1).text, /当前会话权限已切换为：danger-full-access/);
+  assert.match(f.sent.at(-1).text, /恢复工作区权限/);
+
+  await f.send('/m permissions');
+  const backIndex = f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length;
+  await f.pick(backIndex);
+  assert.match(f.latestMenu().text, /助手中心/);
+});
+
+test('QQ main menu reports the permission state and its absence without failing', async (t) => {
+  const f = await fixture(t);
+  await f.state.clearSession(key);
+  await f.send('/m');
+  assert.match(f.latestMenu().text, /权限：未绑定会话/);
+
+  // A Host without permission presets still renders the whole menu: the
+  // permission line says so, and nothing claims the menu loaded partially.
+  f.harness.workspaceSession = () => ({ models: async () => ({
+    current: { provider: 'provider', model: 'model-1' }, groups: [], failures: [],
+  }) });
+  await f.state.setSession(key, 'session-original');
+  await f.send('/m');
+  const text = f.latestMenu().text;
+  assert.match(text, /权限：暂不可用/);
+  assert.doesNotMatch(text, /部分设置暂未加载/);
+  assert.equal(f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length, 14);
+});
+
+test('QQ permission menu explains an unbound session and still offers the way back', async (t) => {
+  const f = await fixture(t);
+  await f.state.clearSession(key);
+  await f.send('/m permissions');
+  const menu = f.latestMenu();
+  assert.match(menu.text, /尚未绑定会话/);
+  assert.equal(menu.keyboard.content.rows.flatMap((r) => r.buttons).length, 1);
+  await f.pick(1);
+  assert.match(f.latestMenu().text, /助手中心/);
+});
+
+test('QQ permission menu degrades when the Host exposes no permission catalog', async (t) => {
+  const f = await fixture(t);
+  f.harness.workspaceSession = () => ({ models: async () => ({
+    current: { provider: 'provider', model: 'model-1' }, groups: [], failures: [],
+  }) });
+  await f.send('/m permissions');
+  assert.match(f.latestMenu().text, /暂不支持/);
+});
+
+test('QQ permission menu keeps a numeric preset ID addressable', async (t) => {
+  const f = await fixture(t);
+  const original = f.harness.workspaceSession;
+  const executed = [];
+  f.harness.workspaceSession = (id) => ({
+    ...original(id),
+    executeCommand: async (command) => {
+      executed.push(command);
+      return { result: { kind: 'success', text: 'ok' } };
+    },
+    permissions: async () => ({
+      currentValue: '123',
+      options: [{ value: '123', name: '数字档位' }, { value: '456', name: '另一档位' }],
+    }),
+  });
+  await f.send('/m permissions');
+  assert.match(f.latestMenu().text, /1\. ✓ 数字档位/);
+  await f.pick(1);
+  // The Host receives the resolved ID, not the menu's `id:` address form.
+  assert.deepEqual(executed, ['/permission 123']);
+});
+
+test('QQ permission menu pages a large Host catalog instead of truncating it', async (t) => {
+  const f = await fixture(t);
+  const original = f.harness.workspaceSession;
+  const many = Array.from({ length: 12 }, (_, i) => ({ value: `preset-${i}`, name: `档位 ${i}` }));
+  f.harness.workspaceSession = (id) => ({
+    ...original(id),
+    permissions: async () => ({ currentValue: 'preset-0', options: many }),
+  });
+  await f.send('/m permissions');
+  const first = f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons);
+  assert.equal(first.length, 8, 'six presets, next page and back');
+  assert.match(f.latestMenu().text, /第 1 \/ 2 页/);
+  assert.match(f.latestMenu().text, /1\. ✓ 档位 0/);
+
+  const next = first.findIndex((button) => button.render_data.label.includes('下一页'));
+  await f.pick(next + 1);
+  const second = f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons);
+  assert.match(f.latestMenu().text, /第 2 \/ 2 页/);
+  // Page two restarts numbering; only the labels prove nothing was dropped.
+  assert.match(f.latestMenu().text, /1\. 档位 6/);
+  assert.match(f.latestMenu().text, /6\. 档位 11/);
+  assert.ok(second.some((button) => button.render_data.label.includes('上一页')));
+  assert.ok(second.some((button) => button.render_data.label.includes('返回主菜单')));
+});
+
 test('QQ status, help and partial catalogs retain usable navigation and escape Markdown labels', async (t) => {
   const f = await fixture(t);
   await f.send('/m status');
@@ -337,7 +485,7 @@ test('QQ status, help and partial catalogs retain usable navigation and escape M
   f.harness.listModels = async () => { throw new Error('catalog down'); };
   f.harness.workspaceSession = () => ({ models: f.harness.listModels });
   await f.send('/m');
-  assert.equal(f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length, 13);
+  assert.equal(f.latestMenu().keyboard.content.rows.flatMap((r) => r.buttons).length, 14);
   assert.match(f.latestMenu().text, /部分设置暂未加载/);
   const view = { title: '菜单', entries: [{ label: '[标题](https://example.invalid)', action: { kind: 'command', text: '/new' } }] };
   assert.ok(qqMenuText(view).includes('[标题]'));
