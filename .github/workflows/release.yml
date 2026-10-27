@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, pack, and upload release assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run checks
+        run: npm run check
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Pack tarball
+        run: npm pack
+        env:
+          npm_config_cache: ${{ github.workspace }}/.npm-cache
+
+      - name: Rename tarball to alanyz106-dsh-im-<version>.tgz
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          SRC="xmanrui-dsh-im-${VERSION}.tgz"
+          DST="alanyz106-dsh-im-${VERSION}.tgz"
+          mv "$SRC" "$DST"
+          echo "ASSET=$DST" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release and upload tarball
+        uses: softprops/action-gh-release@c062e08bd532815e2082a3a052fd46a2b5b3b9ae
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
