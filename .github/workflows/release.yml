@@ -50,7 +50,7 @@ jobs:
           echo "ASSET=$DST" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release and upload tarball
-        uses: softprops/action-gh-release@c062e08bd532815e2082a3a052fd46a2b5b3b9ae
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
